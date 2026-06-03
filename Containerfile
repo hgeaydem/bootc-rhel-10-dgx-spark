@@ -1,0 +1,58 @@
+# DGX Spark (GB10) Custom Kernel + NVIDIA Driver - bootc Image
+#
+# Must be built on aarch64. The kernel build stage takes 30min-several hours.
+# Requires a subscribed RHEL host (entitlements are shared into the build).
+#
+#   podman build -t dgx-spark-bootc .
+
+# ---------------------------------------------------------------------------
+# Stage 1: Build the custom GB10 kernel and NVIDIA GPU driver RPMs
+# ---------------------------------------------------------------------------
+FROM registry.redhat.io/rhel10-eus/rhel-10.2-bootc:10.2 AS builder
+
+RUN dnf config-manager --set-enabled codeready-builder-for-rhel-10-aarch64-rpms
+
+RUN dnf -y install git make rpm-build gcc
+
+ADD nvidia-gb10.tar /build/
+
+WORKDIR /build/nvidia-gb10
+
+# Prevent git commit info from being appended to the kernel version string
+RUN touch localversion
+
+RUN dnf -y --skip-broken install $(make dist-get-buildreqs | grep "Missing dependencies:" | cut -d":" -f2-)
+
+RUN make dist-rpms
+
+# Install kernel-devel so the NVIDIA driver spec can detect and build against it
+RUN dnf -y install redhat/rpm/RPMS/aarch64/kernel-64k-devel-6*.rpm
+
+COPY kmod-nvidia-open.spec /build/kmod-nvidia-open.spec
+RUN mkdir -p /root/rpmbuild/SOURCES && \
+    rpmbuild -bb --define "_disable_source_fetch 0" /build/kmod-nvidia-open.spec
+
+# Collect only the runtime RPMs (no debug/devel/headers)
+RUN mkdir -p /output/rpms && \
+    find redhat/rpm/RPMS/aarch64/ -name 'kernel-64k-*.rpm' \
+        ! -name '*debug*' ! -name '*devel*' ! -name '*headers*' \
+        -exec cp {} /output/rpms/ \; && \
+    cp /root/rpmbuild/RPMS/aarch64/kmod-nvidia-open-*.rpm /output/rpms/
+
+# ---------------------------------------------------------------------------
+# Stage 2: Final bootc image with custom kernel and GPU driver
+# ---------------------------------------------------------------------------
+FROM registry.redhat.io/rhel10-eus/rhel-10.2-bootc:10.2
+
+COPY --from=builder /output/rpms/ /tmp/rpms/
+
+RUN dnf install -y /tmp/rpms/*.rpm && \
+    rm -rf /tmp/rpms && \
+    dnf clean all
+
+RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+
+RUN dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel10/sbsa/cuda-rhel10.repo && \
+    dnf clean all && \
+    dnf -y install cuda && \
+    dnf clean all
