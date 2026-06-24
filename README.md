@@ -80,7 +80,7 @@ podman build -t dgx-spark-bootc:wayland -f Containerfile.wayland .
 
 ### 5. b. Build the Installer image
 
-If you want to create an insttaller iso embedding the Spark kernel, you will need to create an installer container to point to in the next steps :
+If you want to create an installer iso embedding the Spark kernel, you will need to create an installer container to point to in the next steps :
 
 ```bash
 podman build -t dgx-spark-bootc:installer -f Containerfile.installer .
