@@ -3,7 +3,7 @@
 # Must be built on aarch64. The kernel build stage takes 30min-several hours.
 # Requires a subscribed RHEL host (entitlements are shared into the build).
 #
-#   podman build -t dgx-spark-bootc .
+#   podman build -t dgx-spark-bootc:installer .
 
 # ---------------------------------------------------------------------------
 # Stage 1: Build the custom GB10 kernel and NVIDIA GPU driver RPMs
@@ -57,7 +57,7 @@ RUN dnf config-manager --add-repo https://developer.download.nvidia.com/compute/
     dnf -y install cuda && \
     dnf clean all
 
-RUN dnf -y install shim-aa64 grub2-efi-aa64 grub2-efi-aa64-cdboot grub2-tools-extra efibootmgr prefixdevname &&\
+RUN dnf -y install shim-aa64 grub2-efi-aa64 grub2-efi-aa64-cdboot grub2-tools-extra efibootmgr anaconda anaconda-install-env-deps anaconda-dracut lorax python3-mako prefixdevname &&\
     dnf reinstall -y shim-aa64 grub2-efi-aa64 &&\
     dnf clean all
 

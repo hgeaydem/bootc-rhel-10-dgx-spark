@@ -3,7 +3,7 @@
 # Must be built on aarch64. The kernel build stage takes 30min-several hours.
 # Requires a subscribed RHEL host (entitlements are shared into the build).
 #
-#   podman build -t dgx-spark-bootc .
+#   podman build -t dgx-spark-bootc:wayland .
 
 # ---------------------------------------------------------------------------
 # Stage 1: Build the custom GB10 kernel and NVIDIA GPU driver RPMs
@@ -32,12 +32,26 @@ COPY kmod-nvidia-open.spec /build/kmod-nvidia-open.spec
 RUN mkdir -p /root/rpmbuild/SOURCES && \
     rpmbuild -bb --define "_disable_source_fetch 0" /build/kmod-nvidia-open.spec
 
+# Build egl-wayland for wayland GPU acceleration
+RUN mkdir /root/rpmbuild/SPECS
+COPY egl-wayland.spec /root/rpmbuild/SPECS/egl-wayland.spec
+COPY egl-wayland-1.1.21.tar.gz /root/rpmbuild/SOURCES/egl-wayland-1.1.21.tar.gz
+RUN dnf -y install meson ninja-build libdrm-devel wayland-devel mesa-libEGL-devel libglvnd-egl &&\
+    dnf -y install https://rpmfind.net/linux/epel/10.2/Everything/x86_64/Packages/e/eglexternalplatform-devel-1.2.1-1.el10_1.noarch.rpm &&\
+    dnf -y builddep ~/rpmbuild/SPECS/egl-wayland.spec &&\
+    dnf clean all
+
+RUN rpmbuild -ba ~/rpmbuild/SPECS/egl-wayland.spec
+
 # Collect only the runtime RPMs (no debug/devel/headers)
 RUN mkdir -p /output/rpms && \
     find redhat/rpm/RPMS/aarch64/ -name 'kernel-64k-*.rpm' \
         ! -name '*debug*' ! -name '*devel*' ! -name '*headers*' \
         -exec cp {} /output/rpms/ \; && \
-    cp /root/rpmbuild/RPMS/aarch64/kmod-nvidia-open-*.rpm /output/rpms/
+    cp /root/rpmbuild/RPMS/aarch64/kmod-nvidia-open-*.rpm /output/rpms/ &&\
+    cp ~/rpmbuild/RPMS/aarch64/* /output/rpms/
+
+RUN rm -f /output/rpms/egl-wayland-devel*
 
 # ---------------------------------------------------------------------------
 # Stage 2: Final bootc image with custom kernel and GPU driver
@@ -45,6 +59,9 @@ RUN mkdir -p /output/rpms && \
 FROM registry.redhat.io/rhel10-eus/rhel-10.2-bootc:10.2
 
 COPY --from=builder /output/rpms/ /tmp/rpms/
+
+RUN mkdir /tmp/wayland &&\
+    mv /tmp/rpms/egl-wayland* /tmp/wayland/
 
 RUN dnf install -y /tmp/rpms/*.rpm && \
     rm -rf /tmp/rpms && \
@@ -61,6 +78,28 @@ RUN dnf -y install shim-aa64 grub2-efi-aa64 grub2-efi-aa64-cdboot grub2-tools-ex
     dnf reinstall -y shim-aa64 grub2-efi-aa64 &&\
     dnf clean all
 
-RUN rpm -qa | grep -E '^kernel(-core|-modules|-modules-core|-modules-extra|-headers)?-[0-9]' | grep -v '64k' | xargs rpm -e --nodeps
+#Setting up XWaylandto work with the nvidia gpu
+RUN dnf groupinstall "Server with GUI" -y &&\
+    dnf -y install /tmp/wayland/*.rpm &&\
+    dnf clean all
+
+RUN echo -e "GBM_BACKEND=nvidia-drm\n__GLX_VENDOR_LIBRARY_NAME=nvidia\nLIBVA_DRIVER_NAME=nvidia" >> /etc/environment
+
+RUN echo -e "blacklist nouveau\noptions nouveau modeset=0" >> /etc/modprobe.d/blacklist-nouveau.conf
+
+RUN rpm -qa | grep -E '^kernel(-core|-modules|-modules-core|-modules-extra|-headers)?-[0-9]' | grep -v '64k' | xargs -r rpm -e --nodeps --noscripts
 
 RUN mkdir -p /var/mnt /var/media /var/opt /var/srv
+
+RUN firewall-offline-cmd --add-service=ssh
+
+RUN restorecon -R /lib/firmware/nvidia/
+
+# 1. Create a custom Dracut config to force the Nvidia driver and GSP firmware into the RAM disk
+RUN NV_VERSION=$(rpm -q --queryformat '%{VERSION}' nvidia-modprobe) && \
+    echo 'add_drivers+=" nvidia "' > /etc/dracut.conf.d/99-nvidia.conf && \
+    echo 'install_items+=" /usr/lib/firmware/nvidia/'"${NV_VERSION}"'/gsp_ga10x.bin "' >> /etc/dracut.conf.d/99-nvidia.conf && \
+# 2. Find the exact custom 64k kernel version
+    KVER=$(ls /usr/lib/modules | grep '64k' | head -n 1) && \
+# 3. Force the rebuild
+    dracut --no-hostonly --xz --kver $KVER --force /usr/lib/modules/$KVER/initramfs.img $KVER
