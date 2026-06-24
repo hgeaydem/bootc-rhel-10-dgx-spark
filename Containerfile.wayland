@@ -36,8 +36,7 @@ RUN mkdir -p /root/rpmbuild/SOURCES && \
 RUN mkdir /root/rpmbuild/SPECS
 COPY egl-wayland.spec /root/rpmbuild/SPECS/egl-wayland.spec
 COPY egl-wayland-1.1.21.tar.gz /root/rpmbuild/SOURCES/egl-wayland-1.1.21.tar.gz
-RUN dnf -y install meson ninja-build libdrm-devel wayland-devel mesa-libEGL-devel libglvnd-egl &&\
-    dnf -y install https://rpmfind.net/linux/epel/10.2/Everything/x86_64/Packages/e/eglexternalplatform-devel-1.2.1-1.el10_1.noarch.rpm &&\
+RUN dnf -y install meson ninja-build libdrm-devel wayland-devel mesa-libEGL-devel libglvnd-egl eglexternalplatform-devel &&\
     dnf -y builddep ~/rpmbuild/SPECS/egl-wayland.spec &&\
     dnf clean all
 
